@@ -10,7 +10,7 @@ public interface IRoleService
     Task<IEnumerable<IdentityRole>> GetAllRolesAsync();
     Task<IdentityRole> GetRoleByIdAsync(string roleId);
     Task<IdentityRole> GetRoleByNameAsync(string roleName);
-    Task<bool> CreateRoleAsync(string roleName, IEnumerable<Claim> claims = null);
+    Task<bool> CreateRoleAsync(string roleName, IEnumerable<Claim>? claims = null);
     Task<bool> UpdateRoleAsync(string roleId, string roleName);
     Task<bool> DeleteRoleAsync(string roleId);
     Task<IEnumerable<Claim>> GetRoleClaimsAsync(string roleId);
@@ -72,7 +72,7 @@ public class RoleService : IRoleService
         return role;
     }
 
-    public async Task<bool> CreateRoleAsync(string roleName, IEnumerable<Claim> claims = null)
+    public async Task<bool> CreateRoleAsync(string roleName, IEnumerable<Claim>? claims = null)
     {
         if (string.IsNullOrEmpty(roleName))
         {

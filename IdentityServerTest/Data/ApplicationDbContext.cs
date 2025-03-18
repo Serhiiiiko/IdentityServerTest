@@ -26,7 +26,7 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser, IdentityR
 
             // Configure additional properties
             entity.Property(u => u.FirstName).IsRequired().HasMaxLength(50);
-            entity.Property(u => u.LastName).IsRequired().HasMaxLength(50);
+            entity.Property(u => u.LastName).HasMaxLength(50);
             entity.Property(u => u.CreatedAt).IsRequired();
             entity.Property(u => u.IsActive).IsRequired().HasDefaultValue(true);
 
