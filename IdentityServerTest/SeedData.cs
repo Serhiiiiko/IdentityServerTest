@@ -1,5 +1,5 @@
 ﻿using System.Security.Claims;
-using IdentityModel;
+using Duende.IdentityModel;
 using IdentityServerTest.Data;
 using IdentityServerTest.Models;
 using Microsoft.AspNetCore.Identity;
@@ -8,80 +8,188 @@ using Serilog;
 
 namespace IdentityServerTest;
 
-public class SeedData
+public static class SeedData
 {
     public static void EnsureSeedData(WebApplication app)
     {
         using (var scope = app.Services.GetRequiredService<IServiceScopeFactory>().CreateScope())
         {
-            var context = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-            context.Database.Migrate();
+            var context = scope.ServiceProvider.GetService<ApplicationDbContext>();
+            try
+            {
+                Log.Information("Starting database migration...");
+                context.Database.Migrate();
+                Log.Information("Database migration completed successfully.");
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "An error occurred while migrating the database.");
+                throw;
+            }
 
             var userMgr = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
-            var alice = userMgr.FindByNameAsync("alice").Result;
-            if (alice == null)
+            var roleMgr = scope.ServiceProvider.GetRequiredService<RoleManager<IdentityRole>>();
+
+            // Create roles first
+            EnsureRolesAsync(roleMgr).GetAwaiter().GetResult();
+
+            // Then create users and assign roles
+            EnsureUsersAsync(userMgr).GetAwaiter().GetResult();
+        }
+    }
+
+    private static async Task EnsureRolesAsync(RoleManager<IdentityRole> roleMgr)
+    {
+        Log.Information("Creating roles...");
+
+        // Define all roles with their claims
+        var roles = new Dictionary<string, string[]>
+        {
+            { "Admin", new[] { "admin", "full_access" } },
+            { "Support", new[] { "support", "customer_support" } },
+            { "Registered", new[] { "user", "customer" } }
+        };
+
+        foreach (var role in roles)
+        {
+            var roleName = role.Key;
+            var roleClaims = role.Value;
+
+            var roleExists = await roleMgr.RoleExistsAsync(roleName);
+            if (!roleExists)
             {
-                alice = new ApplicationUser
+                var newRole = new IdentityRole(roleName)
                 {
-                    UserName = "alice",
-                    Email = "AliceSmith@email.com",
+                    NormalizedName = roleName.ToUpper()
+                };
+
+                var result = await roleMgr.CreateAsync(newRole);
+                if (!result.Succeeded)
+                {
+                    Log.Error("Failed to create role {RoleName}: {Errors}",
+                        roleName, string.Join(", ", result.Errors.Select(e => e.Description)));
+                    throw new Exception($"Failed to create role {roleName}");
+                }
+
+                // Add claims to the role
+                foreach (var claimValue in roleClaims)
+                {
+                    var claim = new Claim("role", claimValue);
+                    await roleMgr.AddClaimAsync(newRole, claim);
+                }
+
+                Log.Information("Created role {RoleName} with claims: {Claims}",
+                    roleName, string.Join(", ", roleClaims));
+            }
+        }
+    }
+
+    private static async Task EnsureUsersAsync(UserManager<ApplicationUser> userMgr)
+    {
+        Log.Information("Creating users...");
+
+        // Define all seed users
+        var users = new[]
+        {
+            new
+            {
+                Username = "admin@eshop.com",
+                Password = "Admin123!",
+                FirstName = "System",
+                LastName = "Administrator",
+                Roles = new[] { "Admin" },
+                Claims = new Dictionary<string, string>
+                {
+                    { "permission", "all" },
+                    { "api_access", "full" }
+                }
+            },
+            new
+            {
+                Username = "support@eshop.com",
+                Password = "Support123!",
+                FirstName = "Support",
+                LastName = "Team",
+                Roles = new[] { "Support" },
+                Claims = new Dictionary<string, string>
+                {
+                    { "permission", "support" },
+                    { "api_access", "limited" }
+                }
+            },
+            new
+            {
+                Username = "user@eshop.com",
+                Password = "User123!",
+                FirstName = "Demo",
+                LastName = "User",
+                Roles = new[] { "Registered" },
+                Claims = new Dictionary<string, string>
+                {
+                    { "permission", "basic" },
+                    { "api_access", "user" }
+                }
+            }
+        };
+
+        foreach (var userData in users)
+        {
+            var user = await userMgr.FindByNameAsync(userData.Username);
+            if (user == null)
+            {
+                user = new ApplicationUser
+                {
+                    UserName = userData.Username,
+                    Email = userData.Username,
                     EmailConfirmed = true,
+                    FirstName = userData.FirstName,
+                    LastName = userData.LastName,
+                    IsActive = true,
+                    CreatedAt = DateTime.UtcNow,
+                    HasCompletedRegistration = true
                 };
-                var result = userMgr.CreateAsync(alice, "Pass123$").Result;
+
+                var result = await userMgr.CreateAsync(user, userData.Password);
                 if (!result.Succeeded)
                 {
-                    throw new Exception(result.Errors.First().Description);
+                    Log.Error("Failed to create user {Username}: {Errors}",
+                        userData.Username, string.Join(", ", result.Errors.Select(e => e.Description)));
+                    throw new Exception($"Failed to create user {userData.Username}");
                 }
 
-                result = userMgr.AddClaimsAsync(alice, new Claim[]{
-                            new Claim(JwtClaimTypes.Name, "Alice Smith"),
-                            new Claim(JwtClaimTypes.GivenName, "Alice"),
-                            new Claim(JwtClaimTypes.FamilyName, "Smith"),
-                            new Claim(JwtClaimTypes.WebSite, "http://alice.com"),
-                        }).Result;
-                if (!result.Succeeded)
+                // Add user to roles
+                foreach (var role in userData.Roles)
                 {
-                    throw new Exception(result.Errors.First().Description);
+                    await userMgr.AddToRoleAsync(user, role);
                 }
-                Log.Debug("alice created");
-            }
-            else
-            {
-                Log.Debug("alice already exists");
-            }
 
-            var bob = userMgr.FindByNameAsync("bob").Result;
-            if (bob == null)
-            {
-                bob = new ApplicationUser
+                // Add claims to user
+                var claims = new List<Claim>
                 {
-                    UserName = "bob",
-                    Email = "BobSmith@email.com",
-                    EmailConfirmed = true
+                    new Claim(JwtClaimTypes.Name, $"{userData.FirstName} {userData.LastName}"),
+                    new Claim(JwtClaimTypes.GivenName, userData.FirstName),
+                    new Claim(JwtClaimTypes.FamilyName, userData.LastName),
+                    new Claim(JwtClaimTypes.Email, userData.Username)
                 };
-                var result = userMgr.CreateAsync(bob, "Pass123$").Result;
-                if (!result.Succeeded)
+
+                // Add custom claims
+                foreach (var claim in userData.Claims)
                 {
-                    throw new Exception(result.Errors.First().Description);
+                    claims.Add(new Claim(claim.Key, claim.Value));
                 }
 
-                result = userMgr.AddClaimsAsync(bob, new Claim[]{
-                            new Claim(JwtClaimTypes.Name, "Bob Smith"),
-                            new Claim(JwtClaimTypes.GivenName, "Bob"),
-                            new Claim(JwtClaimTypes.FamilyName, "Smith"),
-                            new Claim(JwtClaimTypes.WebSite, "http://bob.com"),
-                            new Claim("location", "somewhere")
-                        }).Result;
-                if (!result.Succeeded)
+                // Add role claims
+                foreach (var role in userData.Roles)
                 {
-                    throw new Exception(result.Errors.First().Description);
+                    claims.Add(new Claim(JwtClaimTypes.Role, role));
                 }
-                Log.Debug("bob created");
-            }
-            else
-            {
-                Log.Debug("bob already exists");
+
+                await userMgr.AddClaimsAsync(user, claims);
+
+                Log.Information("Created user {Username} with roles: {Roles}",
+                    userData.Username, string.Join(", ", userData.Roles));
             }
         }
     }
 }
+
